@@ -16,6 +16,8 @@ class OAuth2Backend(object):
             oauthlib_core = get_oauthlib_core()
             valid, r = oauthlib_core.verify_request(request, scopes=[])
             if valid:
+                # Copy the access token over to the original request
+                request.access_token = r.access_token
                 return r.user
         return None
 
