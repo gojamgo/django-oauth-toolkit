@@ -24,6 +24,8 @@ which takes care of token verification. In your settings.py:
 
     MIDDLEWARE_CLASSES = (
         '...',
+        # be sure following two appear in this order
+        'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
         'oauth2_provider.middleware.OAuth2TokenMiddleware',
         '...',
     )
@@ -65,7 +67,7 @@ To check everything works properly, mount the view above to some url:
         '...',
     )
 
-You should have an :term:`Application` registered at this point, if you don't follow the steps in
+You should have an :term:`Application` registered at this point, if you don't, follow the steps in
 the previous tutorials to create one. Obtain an :term:`Access Token`, either following the OAuth2
 flow of your application or manually creating in the Django admin.
 Now supposing your access token value is `123456` you can try to access your authenticated view:

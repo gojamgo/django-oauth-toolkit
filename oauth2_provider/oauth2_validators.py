@@ -1,27 +1,27 @@
 from __future__ import unicode_literals
 
 import base64
+import binascii
 import logging
 from datetime import timedelta
 
 from django.utils import timezone
 from django.contrib.auth import authenticate
+from django.core.exceptions import ObjectDoesNotExist
 from oauthlib.oauth2 import RequestValidator
 
 from .compat import unquote_plus
-from .models import Grant, AccessToken, RefreshToken, get_application_model
+from .models import Grant, AccessToken, RefreshToken, get_application_model, AbstractApplication
 from .settings import oauth2_settings
-
-Application = get_application_model()
 
 log = logging.getLogger('oauth2_provider')
 
 GRANT_TYPE_MAPPING = {
-    'authorization_code': (Application.GRANT_AUTHORIZATION_CODE,),
-    'password': (Application.GRANT_PASSWORD,),
-    'client_credentials': (Application.GRANT_CLIENT_CREDENTIALS,),
-    'refresh_token': (Application.GRANT_AUTHORIZATION_CODE, Application.GRANT_PASSWORD,
-                      Application.GRANT_CLIENT_CREDENTIALS)
+    'authorization_code': (AbstractApplication.GRANT_AUTHORIZATION_CODE,),
+    'password': (AbstractApplication.GRANT_PASSWORD,),
+    'client_credentials': (AbstractApplication.GRANT_CLIENT_CREDENTIALS,),
+    'refresh_token': (AbstractApplication.GRANT_AUTHORIZATION_CODE, AbstractApplication.GRANT_PASSWORD,
+                      AbstractApplication.GRANT_CLIENT_CREDENTIALS)
 }
 
 
@@ -34,7 +34,11 @@ class OAuth2Validator(RequestValidator):
         if not auth:
             return None
 
-        auth_type, auth_string = auth.split(' ')
+        splitted = auth.split(' ', 1)
+        if len(splitted) != 2:
+            return None
+        auth_type, auth_string = splitted
+
         if auth_type != "Basic":
             return None
 
@@ -53,7 +57,20 @@ class OAuth2Validator(RequestValidator):
 
         encoding = request.encoding or 'utf-8'
 
-        auth_string_decoded = base64.b64decode(auth_string).decode(encoding)
+        try:
+            b64_decoded = base64.b64decode(auth_string)
+        except (TypeError, binascii.Error):
+            log.debug("Failed basic auth: %s can't be decoded as base64", auth_string)
+            return False
+
+        try:
+            auth_string_decoded = b64_decoded.decode(encoding)
+        except UnicodeDecodeError:
+            log.debug("Failed basic auth: %s can't be decoded as unicode by %s",
+                      auth_string,
+                      encoding)
+            return False
+
         client_id, client_secret = map(unquote_plus, auth_string_decoded.split(':', 1))
 
         if self._load_application(client_id, request) is None:
@@ -73,7 +90,7 @@ class OAuth2Validator(RequestValidator):
         Remember that this method is NOT RECOMMENDED and SHOULD be limited to clients unable to
         directly utilize the HTTP Basic authentication scheme. See rfc:`2.3.1` for more details.
         """
-        #TODO: check if oauthlib has already unquoted client_id and client_secret
+        # TODO: check if oauthlib has already unquoted client_id and client_secret
         client_id = request.client_id
         client_secret = request.client_secret
 
@@ -94,6 +111,11 @@ class OAuth2Validator(RequestValidator):
         If request.client was not set, load application instance for given client_id and store it
         in request.client
         """
+
+        # we want to be sure that request has the client attribute!
+        assert hasattr(request, "client"), "'request' instance has no 'client' attribute"
+
+        Application = get_application_model()
         try:
             request.client = request.client or Application.objects.get(client_id=client_id)
             return request.client
@@ -126,7 +148,7 @@ class OAuth2Validator(RequestValidator):
 
         self._load_application(request.client_id, request)
         if request.client:
-            return request.client.client_type == Application.CLIENT_CONFIDENTIAL
+            return request.client.client_type == AbstractApplication.CLIENT_CONFIDENTIAL
 
         return super(OAuth2Validator, self).client_authentication_required(request,
                                                                            *args, **kwargs)
@@ -156,7 +178,7 @@ class OAuth2Validator(RequestValidator):
         """
         if self._load_application(client_id, request) is not None:
             log.debug("Application %s has type %s" % (client_id, request.client.client_type))
-            return request.client.client_type != Application.CLIENT_CONFIDENTIAL
+            return request.client.client_type != AbstractApplication.CLIENT_CONFIDENTIAL
         return False
 
     def confirm_redirect_uri(self, client_id, code, redirect_uri, client, *args, **kwargs):
@@ -230,9 +252,9 @@ class OAuth2Validator(RequestValidator):
         rfc:`8.4`, so validate the response_type only if it matches 'code' or 'token'
         """
         if response_type == 'code':
-            return client.authorization_grant_type == Application.GRANT_AUTHORIZATION_CODE
+            return client.authorization_grant_type == AbstractApplication.GRANT_AUTHORIZATION_CODE
         elif response_type == 'token':
-            return client.authorization_grant_type == Application.GRANT_IMPLICIT
+            return client.authorization_grant_type == AbstractApplication.GRANT_IMPLICIT
         else:
             return False
 
@@ -270,7 +292,7 @@ class OAuth2Validator(RequestValidator):
 
         expires = timezone.now() + timedelta(seconds=oauth2_settings.ACCESS_TOKEN_EXPIRE_SECONDS)
         if request.grant_type == 'client_credentials':
-            request.user = request.client.user
+            request.user = None
 
         access_token = AccessToken(
             user=request.user,
@@ -292,6 +314,29 @@ class OAuth2Validator(RequestValidator):
         # TODO check out a more reliable way to communicate expire time to oauthlib
         token['expires_in'] = oauth2_settings.ACCESS_TOKEN_EXPIRE_SECONDS
 
+    def revoke_token(self, token, token_type_hint, request, *args, **kwargs):
+        """
+        Revoke an access or refresh token.
+
+        :param token: The token string.
+        :param token_type_hint: access_token or refresh_token.
+        :param request: The HTTP Request (oauthlib.common.Request)
+        """
+        if token_type_hint not in ['access_token', 'refresh_token']:
+            token_type_hint = None
+
+        token_types = {
+            'access_token': AccessToken,
+            'refresh_token': RefreshToken,
+        }
+
+        token_type = token_types.get(token_type_hint, AccessToken)
+        try:
+            token_type.objects.get(token=token).delete()
+        except ObjectDoesNotExist:
+            for other_type in [_t for _t in token_types.values() if _t != token_type]:
+                other_type.objects.filter(token=token).delete()
+
     def validate_user(self, username, password, client, request, *args, **kwargs):
         """
         Check username and password correspond to a valid and active User
@@ -303,9 +348,9 @@ class OAuth2Validator(RequestValidator):
         return False
 
     def get_original_scopes(self, refresh_token, request, *args, **kwargs):
-        # TODO: since this method is invoked *after* validate_refresh_token, could we avoid this
-        # second query for RefreshToken?
-        rt = RefreshToken.objects.get(token=refresh_token)
+        # Avoid second query for RefreshToken since this method is invoked *after*
+        # validate_refresh_token.
+        rt = request.refresh_token_instance
         return rt.access_token.scope
 
     def validate_refresh_token(self, refresh_token, client, request, *args, **kwargs):
@@ -316,7 +361,9 @@ class OAuth2Validator(RequestValidator):
         try:
             rt = RefreshToken.objects.get(token=refresh_token)
             request.user = rt.user
-            request.refresh_token = rt
+            request.refresh_token = rt.token
+            # Temporary store RefreshToken instance to be reused by get_original_scopes.
+            request.refresh_token_instance = rt
             return rt.application == client
 
         except RefreshToken.DoesNotExist:

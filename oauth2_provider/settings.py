@@ -32,7 +32,9 @@ USER_SETTINGS = getattr(settings, 'OAUTH2_PROVIDER', None)
 DEFAULTS = {
     'CLIENT_ID_GENERATOR_CLASS': 'oauth2_provider.generators.ClientIdGenerator',
     'CLIENT_SECRET_GENERATOR_CLASS': 'oauth2_provider.generators.ClientSecretGenerator',
+    'CLIENT_SECRET_GENERATOR_LENGTH': 128,
     'OAUTH2_VALIDATOR_CLASS': 'oauth2_provider.oauth2_validators.OAuth2Validator',
+    'OAUTH2_BACKEND_CLASS': 'oauth2_provider.oauth2_backends.OAuthLibCore',
     'SCOPES': {"read": "Reading scope", "write": "Writing scope"},
     'READ_SCOPE': 'read',
     'WRITE_SCOPE': 'write',
@@ -40,6 +42,7 @@ DEFAULTS = {
     'ACCESS_TOKEN_EXPIRE_SECONDS': 36000,
     'APPLICATION_MODEL': getattr(settings, 'OAUTH2_PROVIDER_APPLICATION_MODEL', 'oauth2_provider.Application'),
     'REQUEST_APPROVAL_PROMPT': 'force',
+    'ALLOWED_REDIRECT_URI_SCHEMES': ['http', 'https'],
 
     # Special settings that will be evaluated at runtime
     '_SCOPES': [],
@@ -50,7 +53,9 @@ MANDATORY = (
     'CLIENT_ID_GENERATOR_CLASS',
     'CLIENT_SECRET_GENERATOR_CLASS',
     'OAUTH2_VALIDATOR_CLASS',
+    'OAUTH2_BACKEND_CLASS',
     'SCOPES',
+    'ALLOWED_REDIRECT_URI_SCHEMES',
 )
 
 # List of settings that may be in string import notation.
@@ -58,6 +63,7 @@ IMPORT_STRINGS = (
     'CLIENT_ID_GENERATOR_CLASS',
     'CLIENT_SECRET_GENERATOR_CLASS',
     'OAUTH2_VALIDATOR_CLASS',
+    'OAUTH2_BACKEND_CLASS',
 )
 
 

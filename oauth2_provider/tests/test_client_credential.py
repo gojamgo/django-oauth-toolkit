@@ -13,7 +13,8 @@ from django.views.generic import View
 
 from oauthlib.oauth2 import BackendApplicationServer
 
-from ..models import get_application_model
+from ..models import get_application_model, AccessToken
+from ..oauth2_backends import OAuthLibCore
 from ..oauth2_validators import OAuth2Validator
 from ..settings import oauth2_settings
 from ..views import ProtectedResourceView
@@ -81,6 +82,29 @@ class TestClientCredential(BaseTest):
         response = view(request)
         self.assertEqual(response, "This is a protected resource")
 
+    def test_client_credential_does_not_issue_refresh_token(self):
+        token_request_data = {
+            'grant_type': 'client_credentials',
+        }
+        auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
+
+        response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        content = json.loads(response.content.decode("utf-8"))
+        self.assertNotIn("refresh_token", content)
+
+    def test_client_credential_user_is_none_on_access_token(self):
+        token_request_data = {'grant_type': 'client_credentials'}
+        auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
+
+        response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        content = json.loads(response.content.decode("utf-8"))
+        access_token = AccessToken.objects.get(token=content["access_token"])
+        self.assertIsNone(access_token.user)
+
 
 class TestExtendedRequest(BaseTest):
     @classmethod
@@ -91,6 +115,7 @@ class TestExtendedRequest(BaseTest):
         class TestView(OAuthLibMixin, View):
             server_class = BackendApplicationServer
             validator_class = OAuth2Validator
+            oauthlib_backend_class = OAuthLibCore
 
             def get_scopes(self):
                 return ['read', 'write']
@@ -118,7 +143,7 @@ class TestExtendedRequest(BaseTest):
 
         valid, r = test_view.verify_request(request)
         self.assertTrue(valid)
-        self.assertEqual(r.user, self.dev_user)
+        self.assertIsNone(r.user)
         self.assertEqual(r.client, self.application)
         self.assertEqual(r.scopes, ['read', 'write'])
 
@@ -143,7 +168,10 @@ class TestClientResourcePasswordBased(BaseTest):
             'username': 'test_user',
             'password': '123456'
         }
-        auth_headers = self.get_basic_auth_header(urllib.quote_plus(self.application.client_id), urllib.quote_plus(self.application.client_secret))
+        auth_headers = self.get_basic_auth_header(
+            urllib.quote_plus(self.application.client_id),
+            urllib.quote_plus(self.application.client_secret))
+
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
         self.assertEqual(response.status_code, 200)
 
@@ -160,5 +188,3 @@ class TestClientResourcePasswordBased(BaseTest):
         view = ResourceView.as_view()
         response = view(request)
         self.assertEqual(response, "This is a protected resource")
-
-

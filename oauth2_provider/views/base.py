@@ -1,8 +1,10 @@
 import logging
 
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse
+from django.views.decorators.debug import sensitive_post_parameters
 from django.views.generic import View, FormView
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 
 from oauthlib.oauth2 import Server
 
@@ -11,10 +13,9 @@ from braces.views import LoginRequiredMixin, CsrfExemptMixin
 from ..settings import oauth2_settings
 from ..exceptions import OAuthToolkitError
 from ..forms import AllowForm
+from ..http import HttpResponseUriRedirect
 from ..models import get_application_model
 from .mixins import OAuthLibMixin
-
-Application = get_application_model()
 
 log = logging.getLogger('oauth2_provider')
 
@@ -41,7 +42,7 @@ class BaseAuthorizationView(LoginRequiredMixin, OAuthLibMixin, View):
         redirect, error_response = super(BaseAuthorizationView, self).error_response(error, **kwargs)
 
         if redirect:
-            return HttpResponseRedirect(error_response['url'])
+            return HttpResponseUriRedirect(error_response['url'])
 
         status = error_response['error'].status_code
         return self.render_to_response(error_response, status=status)
@@ -72,6 +73,9 @@ class AuthorizationView(BaseAuthorizationView, FormView):
 
     server_class = Server
     validator_class = oauth2_settings.OAUTH2_VALIDATOR_CLASS
+    oauthlib_backend_class = oauth2_settings.OAUTH2_BACKEND_CLASS
+
+    skip_authorization_completely = False
 
     def get_initial(self):
         # TODO: move this scopes conversion from and to string into a utils function
@@ -100,7 +104,7 @@ class AuthorizationView(BaseAuthorizationView, FormView):
                 request=self.request, scopes=scopes, credentials=credentials, allow=allow)
             self.success_url = uri
             log.debug("Success url for the request: {0}".format(self.success_url))
-            return super(AuthorizationView, self).form_valid(form)
+            return HttpResponseUriRedirect(self.success_url)
 
         except OAuthToolkitError as error:
             return self.error_response(error)
@@ -111,7 +115,8 @@ class AuthorizationView(BaseAuthorizationView, FormView):
             kwargs['scopes_descriptions'] = [oauth2_settings.SCOPES[scope] for scope in scopes]
             kwargs['scopes'] = scopes
             # at this point we know an Application instance with such client_id exists in the database
-            kwargs['application'] = Application.objects.get(client_id=credentials['client_id'])  # TODO: cache it!
+            application = get_application_model().objects.get(client_id=credentials['client_id'])  # TODO: cache it!
+            kwargs['application'] = application
             kwargs.update(credentials)
             self.oauth2_data = kwargs
             # following two loc are here only because of https://code.djangoproject.com/ticket/17795
@@ -121,7 +126,18 @@ class AuthorizationView(BaseAuthorizationView, FormView):
             # Check to see if the user has already granted access and return
             # a successful response depending on 'approval_prompt' url parameter
             require_approval = request.GET.get('approval_prompt', oauth2_settings.REQUEST_APPROVAL_PROMPT)
-            if require_approval == 'auto':
+
+            # If skip_authorization field is True, skip the authorization screen even
+            # if this is the first use of the application and there was no previous authorization.
+            # This is useful for in-house applications-> assume an in-house applications
+            # are already approved.
+            if application.skip_authorization:
+                uri, headers, body, status = self.create_authorization_response(
+                    request=self.request, scopes=" ".join(scopes),
+                    credentials=credentials, allow=True)
+                return HttpResponseUriRedirect(uri)
+
+            elif require_approval == 'auto':
                 tokens = request.user.accesstoken_set.filter(application=kwargs['application'],
                                                              expires__gt=timezone.now()).all()
                 # check past authorizations regarded the same scopes as the current one
@@ -130,7 +146,7 @@ class AuthorizationView(BaseAuthorizationView, FormView):
                         uri, headers, body, status = self.create_authorization_response(
                             request=self.request, scopes=" ".join(scopes),
                             credentials=credentials, allow=True)
-                        return HttpResponseRedirect(uri)
+                        return HttpResponseUriRedirect(uri)
 
             return self.render_to_response(self.get_context_data(**kwargs))
 
@@ -149,10 +165,29 @@ class TokenView(CsrfExemptMixin, OAuthLibMixin, View):
     """
     server_class = Server
     validator_class = oauth2_settings.OAUTH2_VALIDATOR_CLASS
+    oauthlib_backend_class = oauth2_settings.OAUTH2_BACKEND_CLASS
 
+    @method_decorator(sensitive_post_parameters('password'))
     def post(self, request, *args, **kwargs):
         url, headers, body, status = self.create_token_response(request)
         response = HttpResponse(content=body, status=status)
+
+        for k, v in headers.items():
+            response[k] = v
+        return response
+
+
+class RevokeTokenView(CsrfExemptMixin, OAuthLibMixin, View):
+    """
+    Implements an endpoint to revoke access or refresh tokens
+    """
+    server_class = Server
+    validator_class = oauth2_settings.OAUTH2_VALIDATOR_CLASS
+    oauthlib_backend_class = oauth2_settings.OAUTH2_BACKEND_CLASS
+
+    def post(self, request, *args, **kwargs):
+        url, headers, body, status = self.create_revocation_response(request)
+        response = HttpResponse(content=body or '', status=status)
 
         for k, v in headers.items():
             response[k] = v

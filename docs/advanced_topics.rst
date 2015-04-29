@@ -50,6 +50,8 @@ That's all, now Django OAuth Toolkit will use your model wherever an Application
     See issue #90 (https://github.com/evonove/django-oauth-toolkit/issues/90) for details
 
 
+.. _skip-auth-form:
+
 Skip authorization form
 =======================
 
@@ -57,7 +59,16 @@ Depending on the OAuth2 flow in use and the access token policy, users might be 
 same authorization multiple times: sometimes this is acceptable or even desiderable but other it isn't.
 To control DOT behaviour you can use `approval_prompt` parameter when hitting the authorization endpoint.
 Possible values are:
- * `force` - users are always prompted for authorization.
 
- * `auto` - users are prompted only the first time, subsequent authorizations for the same application
-   and scopes will be automatically accepted.
+* `force` - users are always prompted for authorization.
+
+* `auto` - users are prompted only the first time, subsequent authorizations for the same application
+  and scopes will be automatically accepted.
+
+Skip authorization completely for trusted applications
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You might want to completely bypass the authorization form, for instance if your application is an
+in-house product or if you already trust the application owner by other means. To this end, you have to
+set ``skip_authorization = True`` on the ``Application`` model, either programmaticaly or within the
+Django admin. Users will *not* be prompted for authorization, even on the first use of the application.

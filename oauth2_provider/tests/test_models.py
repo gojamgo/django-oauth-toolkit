@@ -9,8 +9,9 @@ import django
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
-from ..models import AccessToken, get_application_model
+from ..models import get_application_model, Grant, AccessToken, RefreshToken
 from ..compat import get_user_model
 
 
@@ -80,6 +81,7 @@ class TestModels(TestCase):
         app.name = "test_app"
         self.assertEqual("%s" % app, "test_app")
 
+
 @skipIf(django.VERSION < (1, 5), "Behavior is broken on 1.4 and there is no solution")
 @override_settings(OAUTH2_PROVIDER_APPLICATION_MODEL='tests.TestApplication')
 class TestCustomApplicationModel(TestCase):
@@ -98,3 +100,37 @@ class TestCustomApplicationModel(TestCase):
         related_object_names = [ro.name for ro in UserModel._meta.get_all_related_objects()]
         self.assertNotIn('oauth2_provider:application', related_object_names)
         self.assertIn('tests:testapplication', related_object_names)
+
+
+class TestGrantModel(TestCase):
+
+    def test_str(self):
+        grant = Grant(code="test_code")
+        self.assertEqual("%s" % grant, grant.code)
+
+
+class TestAccessTokenModel(TestCase):
+    def setUp(self):
+        self.user = UserModel.objects.create_user("test_user", "test@user.com", "123456")
+
+    def test_str(self):
+        access_token = AccessToken(token="test_token")
+        self.assertEqual("%s" % access_token, access_token.token)
+
+    def test_user_can_be_none(self):
+        app = Application.objects.create(
+            name="test_app",
+            redirect_uris="http://localhost http://example.com http://example.it",
+            user=self.user,
+            client_type=Application.CLIENT_CONFIDENTIAL,
+            authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
+        )
+        access_token = AccessToken.objects.create(token="test_token", application=app, expires=timezone.now())
+        self.assertIsNone(access_token.user)
+
+
+class TestRefreshTokenModel(TestCase):
+
+    def test_str(self):
+        refresh_token = RefreshToken(token="test_token")
+        self.assertEqual("%s" % refresh_token, refresh_token.token)

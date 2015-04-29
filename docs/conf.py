@@ -18,10 +18,10 @@ import sys, os, re
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 here = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, here)
-sys.path.insert(0, os.path.join(here, '..'))
-sys.path.insert(0, os.path.join(here, '..', 'example'))
+sys.path.insert(0, os.path.dirname(here))
+sys.path.insert(0, os.path.join(os.path.dirname(here), 'example'))
 
-os.environ['DJANGO_SETTINGS_MODULE'] = 'example.settings.dev'
+os.environ['DJANGO_SETTINGS_MODULE'] = 'oauth2_provider.tests.settings'
 import oauth2_provider
 
 # -- General configuration -----------------------------------------------------
@@ -31,7 +31,7 @@ import oauth2_provider
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.todo', 'sphinx.ext.coverage', 'rfc']
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.todo', 'sphinx.ext.coverage', 'rfc',]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -109,7 +109,7 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = 'default'
+#html_theme = 'classic'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the

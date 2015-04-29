@@ -40,8 +40,8 @@ guidelines <https://django-oauth-toolkit.readthedocs.org/en/latest/contributing.
 Requirements
 ------------
 
-* Python 2.6, 2.7, 3.3
-* Django 1.4, 1.5, 1.6
+* Python 2.6, 2.7, 3.3, 3.4
+* Django 1.4, 1.5, 1.6, 1.7
 
 Installation
 ------------
@@ -53,7 +53,7 @@ Install with pip::
 Add `oauth2_provider` to your `INSTALLED_APPS`
 
 .. code-block:: python
-    
+
     INSTALLED_APPS = (
         ...
         'oauth2_provider',
@@ -89,6 +89,40 @@ Roadmap / Todo list (help wanted)
 
 Changelog
 ---------
+
+master branch
+~~~~~~~~~~~~~
+
+* ``oauthlib_backend_class`` is now pluggable through Django settings
+* #127: ``application/json`` Content-Type is now supported using ``JSONOAuthLibCore``
+
+0.8.1 [2015-04-27]
+~~~~~~~~~~~~~~~~~~
+
+* South migrations fixed. Added new django migrations.
+
+0.8.0 [2015-03-27]
+~~~~~~~~~~~~~~~~~~
+
+* Several docs improvements and minor fixes
+* #185: fixed vulnerabilities on Basic authentication
+* #173: ProtectResourceMixin now allows OPTIONS requests
+* Fixed client_id and client_secret characters set
+* #169: hide sensitive informations in error emails
+* #161: extend search to all token types when revoking a token
+* #160: return empty response on successful token revocation
+* #157: skip authorization form with ``skip_authorization_completely`` class field
+* #155: allow custom uri schemes
+* fixed ``get_application_model`` on Django 1.7
+* fixed non rotating refresh tokens
+* #137: fixed base template
+* customized ``client_secret`` lenght
+* #38: create access tokens not bound to a user instance for *client credentials* flow
+
+0.7.2 [2014-07-02]
+~~~~~~~~~~~~~~~~~~
+
+* Don't pin oauthlib
 
 0.7.1 [2014-04-27]
 ~~~~~~~~~~~~~~~~~~

@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 import base64
 import json
 import datetime
+import mock
 
 from django.test import TestCase, RequestFactory
 from django.core.urlresolvers import reverse
@@ -32,9 +33,11 @@ class BaseTest(TestCaseUtils, TestCase):
         self.test_user = UserModel.objects.create_user("test_user", "test@user.com", "123456")
         self.dev_user = UserModel.objects.create_user("dev_user", "dev@user.com", "123456")
 
+        oauth2_settings.ALLOWED_REDIRECT_URI_SCHEMES = ['http', 'custom-scheme']
+
         self.application = Application(
             name="Test Application",
-            redirect_uris="http://localhost http://example.com http://example.it",
+            redirect_uris="http://localhost http://example.com http://example.it custom-scheme://example.com",
             user=self.dev_user,
             client_type=Application.CLIENT_CONFIDENTIAL,
             authorization_grant_type=Application.GRANT_AUTHORIZATION_CODE,
@@ -50,6 +53,26 @@ class BaseTest(TestCaseUtils, TestCase):
 
 
 class TestAuthorizationCodeView(BaseTest):
+    def test_skip_authorization_completely(self):
+        """
+        If application.skip_authorization = True, should skip the authorization page.
+        """
+        self.client.login(username="test_user", password="123456")
+        self.application.skip_authorization = True
+        self.application.save()
+
+        query_string = urlencode({
+            'client_id': self.application.client_id,
+            'response_type': 'code',
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'http://example.it',
+        })
+        url = "{url}?{qs}".format(url=reverse('oauth2_provider:authorize'), qs=query_string)
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+
     def test_pre_auth_invalid_client(self):
         """
         Test error for an invalid client_id with response_type: code
@@ -92,13 +115,41 @@ class TestAuthorizationCodeView(BaseTest):
         self.assertEqual(form['scope'].value(), "read write")
         self.assertEqual(form['client_id'].value(), self.application.client_id)
 
+    def test_pre_auth_valid_client_custom_redirect_uri_scheme(self):
+        """
+        Test response for a valid client_id with response_type: code
+        using a non-standard, but allowed, redirect_uri scheme.
+        """
+        self.client.login(username="test_user", password="123456")
+
+        query_string = urlencode({
+            'client_id': self.application.client_id,
+            'response_type': 'code',
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'custom-scheme://example.com',
+        })
+        url = "{url}?{qs}".format(url=reverse('oauth2_provider:authorize'), qs=query_string)
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        # check form is in context and form params are valid
+        self.assertIn("form", response.context)
+
+        form = response.context["form"]
+        self.assertEqual(form['redirect_uri'].value(), "custom-scheme://example.com")
+        self.assertEqual(form['state'].value(), "random_state_string")
+        self.assertEqual(form['scope'].value(), "read write")
+        self.assertEqual(form['client_id'].value(), self.application.client_id)
+
     def test_pre_auth_approval_prompt(self):
         """
-
+        TODO
         """
         tok = AccessToken.objects.create(user=self.test_user, token='1234567890',
                                          application=self.application,
-                                         expires=timezone.now()+datetime.timedelta(days=1),
+                                         expires=timezone.now() + datetime.timedelta(days=1),
                                          scope='read write')
         self.client.login(username="test_user", password="123456")
         query_string = urlencode({
@@ -120,13 +171,13 @@ class TestAuthorizationCodeView(BaseTest):
 
     def test_pre_auth_approval_prompt_default(self):
         """
-
+        TODO
         """
         self.assertEqual(oauth2_settings.REQUEST_APPROVAL_PROMPT, 'force')
 
         AccessToken.objects.create(user=self.test_user, token='1234567890',
                                    application=self.application,
-                                   expires=timezone.now()+datetime.timedelta(days=1),
+                                   expires=timezone.now() + datetime.timedelta(days=1),
                                    scope='read write')
         self.client.login(username="test_user", password="123456")
         query_string = urlencode({
@@ -142,13 +193,13 @@ class TestAuthorizationCodeView(BaseTest):
 
     def test_pre_auth_approval_prompt_default_override(self):
         """
-
+        TODO
         """
         oauth2_settings.REQUEST_APPROVAL_PROMPT = 'auto'
 
         AccessToken.objects.create(user=self.test_user, token='1234567890',
                                    application=self.application,
-                                   expires=timezone.now()+datetime.timedelta(days=1),
+                                   expires=timezone.now() + datetime.timedelta(days=1),
                                    scope='read write')
         self.client.login(username="test_user", password="123456")
         query_string = urlencode({
@@ -307,6 +358,89 @@ class TestAuthorizationCodeView(BaseTest):
         response = self.client.post(reverse('oauth2_provider:authorize'), data=form_data)
         self.assertEqual(response.status_code, 400)
 
+    def test_code_post_auth_allow_custom_redirect_uri_scheme(self):
+        """
+        Test authorization code is given for an allowed request with response_type: code
+        using a non-standard, but allowed, redirect_uri scheme.
+        """
+        self.client.login(username="test_user", password="123456")
+
+        form_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'custom-scheme://example.com',
+            'response_type': 'code',
+            'allow': True,
+        }
+
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=form_data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('custom-scheme://example.com?', response['Location'])
+        self.assertIn('state=random_state_string', response['Location'])
+        self.assertIn('code=', response['Location'])
+
+    def test_code_post_auth_deny_custom_redirect_uri_scheme(self):
+        """
+        Test error when resource owner deny access
+        using a non-standard, but allowed, redirect_uri scheme.
+        """
+        self.client.login(username="test_user", password="123456")
+
+        form_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'custom-scheme://example.com',
+            'response_type': 'code',
+            'allow': False,
+        }
+
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=form_data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('custom-scheme://example.com?', response['Location'])
+        self.assertIn("error=access_denied", response['Location'])
+
+    def test_code_post_auth_redirection_uri_with_querystring(self):
+        """
+        Tests that a redirection uri with query string is allowed
+        and query string is retained on redirection.
+        See http://tools.ietf.org/html/rfc6749#section-3.1.2
+        """
+        self.client.login(username="test_user", password="123456")
+
+        form_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'http://example.com?foo=bar',
+            'response_type': 'code',
+            'allow': True,
+        }
+
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=form_data)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("http://example.com?foo=bar", response['Location'])
+        self.assertIn("code=", response['Location'])
+
+    def test_code_post_auth_fails_when_redirect_uri_path_is_invalid(self):
+        """
+        Tests that a redirection uri is matched using scheme + netloc + path
+        """
+        self.client.login(username="test_user", password="123456")
+
+        form_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'http://example.com/a?foo=bar',
+            'response_type': 'code',
+            'allow': True,
+        }
+
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=form_data)
+        self.assertEqual(response.status_code, 400)
+
 
 class TestAuthorizationCodeTokenView(BaseTest):
     def get_auth(self):
@@ -388,7 +522,7 @@ class TestAuthorizationCodeTokenView(BaseTest):
 
         # check refresh token cannot be used twice
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
         content = json.loads(response.content.decode("utf-8"))
         self.assertTrue('invalid_grant' in content.values())
 
@@ -472,7 +606,38 @@ class TestAuthorizationCodeTokenView(BaseTest):
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
         self.assertEqual(response.status_code, 200)
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
+
+    def test_refresh_repeating_requests_non_rotating_tokens(self):
+        """
+        Try refreshing an access token with the same refresh token more than once when not rotating tokens.
+        """
+        self.client.login(username="test_user", password="123456")
+        authorization_code = self.get_auth()
+
+        token_request_data = {
+            'grant_type': 'authorization_code',
+            'code': authorization_code,
+            'redirect_uri': 'http://example.it'
+        }
+        auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
+
+        response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+        content = json.loads(response.content.decode("utf-8"))
+        self.assertTrue('refresh_token' in content)
+
+        token_request_data = {
+            'grant_type': 'refresh_token',
+            'refresh_token': content['refresh_token'],
+            'scope': content['scope'],
+        }
+
+        with mock.patch('oauthlib.oauth2.rfc6749.request_validator.RequestValidator.rotate_refresh_token',
+                        return_value=False):
+            response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+            self.assertEqual(response.status_code, 200)
+            response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+            self.assertEqual(response.status_code, 200)
 
     def test_basic_auth_bad_authcode(self):
         """
@@ -488,7 +653,7 @@ class TestAuthorizationCodeTokenView(BaseTest):
         auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
 
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
 
     def test_basic_auth_bad_granttype(self):
         """
@@ -523,7 +688,7 @@ class TestAuthorizationCodeTokenView(BaseTest):
         auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
 
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
 
     def test_basic_auth_bad_secret(self):
         """
@@ -540,7 +705,7 @@ class TestAuthorizationCodeTokenView(BaseTest):
         auth_headers = self.get_basic_auth_header(self.application.client_id, 'BOOM!')
 
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
 
     def test_basic_auth_wrong_auth_type(self):
         """
@@ -562,7 +727,7 @@ class TestAuthorizationCodeTokenView(BaseTest):
         }
 
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
 
     def test_request_body_params(self):
         """
@@ -576,7 +741,7 @@ class TestAuthorizationCodeTokenView(BaseTest):
             'code': authorization_code,
             'redirect_uri': 'http://example.it',
             'client_id': self.application.client_id,
-            'client_secret':  self.application.client_secret,
+            'client_secret': self.application.client_secret,
         }
 
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data)
@@ -631,7 +796,109 @@ class TestAuthorizationCodeTokenView(BaseTest):
         }
 
         response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 401)
+
+    def test_code_exchange_succeed_when_redirect_uri_match(self):
+        """
+        Tests code exchange succeed when redirect uri matches the one used for code request
+        """
+        self.client.login(username="test_user", password="123456")
+
+        # retrieve a valid authorization code
+        authcode_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'http://example.it?foo=bar',
+            'response_type': 'code',
+            'allow': True,
+        }
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=authcode_data)
+        query_dict = parse_qs(urlparse(response['Location']).query)
+        authorization_code = query_dict['code'].pop()
+
+        # exchange authorization code for a valid access token
+        token_request_data = {
+            'grant_type': 'authorization_code',
+            'code': authorization_code,
+            'redirect_uri': 'http://example.it?foo=bar'
+        }
+        auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
+
+        response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        content = json.loads(response.content.decode("utf-8"))
+        self.assertEqual(content['token_type'], "Bearer")
+        self.assertEqual(content['scope'], "read write")
+        self.assertEqual(content['expires_in'], oauth2_settings.ACCESS_TOKEN_EXPIRE_SECONDS)
+
+    def test_code_exchange_fails_when_redirect_uri_does_not_match(self):
+        """
+        Tests code exchange fails when redirect uri does not match the one used for code request
+        """
+        self.client.login(username="test_user", password="123456")
+
+        # retrieve a valid authorization code
+        authcode_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'http://example.it?foo=bar',
+            'response_type': 'code',
+            'allow': True,
+        }
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=authcode_data)
+        query_dict = parse_qs(urlparse(response['Location']).query)
+        authorization_code = query_dict['code'].pop()
+
+        # exchange authorization code for a valid access token
+        token_request_data = {
+            'grant_type': 'authorization_code',
+            'code': authorization_code,
+            'redirect_uri': 'http://example.it?foo=baraa'
+        }
+        auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
+
+        response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+        self.assertEqual(response.status_code, 401)
+
+    def test_code_exchange_succeed_when_redirect_uri_match_with_multiple_query_params(self):
+        """
+        Tests code exchange succeed when redirect uri matches the one used for code request
+        """
+        self.client.login(username="test_user", password="123456")
+        self.application.redirect_uris = "http://localhost http://example.com?foo=bar"
+        self.application.save()
+
+        # retrieve a valid authorization code
+        authcode_data = {
+            'client_id': self.application.client_id,
+            'state': 'random_state_string',
+            'scope': 'read write',
+            'redirect_uri': 'http://example.com?bar=baz&foo=bar',
+            'response_type': 'code',
+            'allow': True,
+        }
+        response = self.client.post(reverse('oauth2_provider:authorize'), data=authcode_data)
+        query_dict = parse_qs(urlparse(response['Location']).query)
+        authorization_code = query_dict['code'].pop()
+
+        # exchange authorization code for a valid access token
+        token_request_data = {
+            'grant_type': 'authorization_code',
+            'code': authorization_code,
+            'redirect_uri': 'http://example.com?bar=baz&foo=bar'
+        }
+        auth_headers = self.get_basic_auth_header(self.application.client_id, self.application.client_secret)
+
+        response = self.client.post(reverse('oauth2_provider:token'), data=token_request_data, **auth_headers)
+        self.assertEqual(response.status_code, 200)
+
+        content = json.loads(response.content.decode("utf-8"))
+        self.assertEqual(content['token_type'], "Bearer")
+        self.assertEqual(content['scope'], "read write")
+        self.assertEqual(content['expires_in'], oauth2_settings.ACCESS_TOKEN_EXPIRE_SECONDS)
 
 
 class TestAuthorizationCodeProtectedResource(BaseTest):
